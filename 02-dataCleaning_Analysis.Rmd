@@ -7,13 +7,10 @@ output: html_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-
 source("~/planA/software tools utils/myUtils.R")
-
 library(readxl)
 library(pheatmap)
 library(venn)
-
 ```
 
 ## Load data and extract expression
