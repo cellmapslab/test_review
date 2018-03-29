@@ -1,0 +1,501 @@
+---
+title: "TMT10plex lisym data - timecourse"
+author: "Nikola Muller"
+date: "26.3.18"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+source("~/planA/software tools utils/myUtils.R")
+
+library(readxl)
+library(pheatmap)
+library(venn)
+
+```
+
+## Load data and extract expression
+
+Load `proteinGroups_TMT.xls` file.
+Use "Protein IDs" column as unique identifier or fows. And work with MaxQuant generated  `Reporter intensity corrected` values
+
+
+
+```{r data_readin }
+
+## dataset load + extract relevant info > expression file
+data.input.file = read_xls("../data/proteinGroups_TMT.xls")
+
+data.reporter.intens.corr = cbind(data.input.file[,c("Protein IDs","Majority protein IDs")], data.input.file[,grep("Reporter intensity corrected",colnames(data.input.file))])
+
+data.reporter.intens.corr.expr = data.frame(lapply(data.reporter.intens.corr[,grep("TMT",colnames(data.reporter.intens.corr))],as.numeric))
+
+
+rownames(data.reporter.intens.corr.expr) = unlist(data.input.file[,"Protein IDs"])
+
+boxplot(log2(1+data.reporter.intens.corr.expr),las=2)
+
+tmt.col.name = substring(colnames(data.reporter.intens.corr.expr),32,35)
+
+
+```
+
+
+
+### remove proteins where not measured in ALL pool reference channesl
+
+Find reference channels with any 0 expression value and REMOVE them -> Essential cleaning!
+
+```{r}
+
+ref.channel.expr = sapply(unique(tmt.col.name),function(tmt_id){
+	(data.reporter.intens.corr.expr[,paste("Reporter.intensity.corrected.0.",tmt_id,sep="")])
+})
+
+# mark those with all NA columns (why ever this happens I dont know)
+mark2delete = which(apply(ref.channel.expr,MARGIN = 1, function(x)sum(is.na(x)))!=0)
+
+zero.entry.in.refChannel = (apply(ref.channel.expr,MARGIN = 1, function(x)sum((x==0))) )
+hist(zero.entry.in.refChannel)
+
+mark2delete = unique(c(mark2delete,which(zero.entry.in.refChannel>0)))
+
+length(mark2delete)
+
+
+
+boxplot(log10(data.reporter.intens.corr.expr[,names(which(annotation.decoded[colnames(data.reporter.intens.corr.expr)] == "Pool"))]),main="MaxQuant corrected intensitites of all pooled samples",las=2)
+
+
+pheatmap(cor(log10(ref.channel.expr[-1*mark2delete,]), use = "pairwise.complete"), main="Correlation of TMT reference (0) channel")
+
+
+
+
+# boxplot(log2(1+data.reporter.intens.corr.expr),las=2)
+
+tmt.col.name = substring(colnames(data.reporter.intens.corr.expr),32,35)
+
+
+
+```
+
+
+# I delete ``r length(mark2delete)`` proteins from expression matrix because 0 or NA values in REFERENCE channel!
+
+```{r cleaning} 
+
+data.reporter.intens.corr = data.reporter.intens.corr[-1*mark2delete,]
+
+
+data.reporter.intens.corr.expr = data.reporter.intens.corr.expr[-1*mark2delete,]
+dim(data.reporter.intens.corr.expr)
+
+
+rm(data.reporter.intens.corr) ## to cleanup
+rm(mark2delete)
+
+```
+
+That leaves ``r nrow(data.reporter.intens.corr.expr)`` realiably identified proteins
+
+
+
+
+
+
+### load annotation info
+
+Load annotation from matrix like file `sample.annotation.matrix.txt` and convert to tabular format
+
+```{r read_annotation}
+
+
+
+
+
+
+## add data descr 
+
+annotation = read.table("../data/sample.annotation.matrix.txt",header=T,row.names="channel")
+# colnames(data.reporter.intens.corr.expr)
+
+annotation.decoded = c()
+for(i in 0:9){
+	for(j in paste("TMT",1:9,sep="")){
+		annotation.decoded[paste("Reporter.intensity.corrected.",i,".",j,sep="")] = 
+		  as.character(annotation[paste(i),j])
+	}
+}
+
+
+
+
+
+annotation.decoded.tabular = do.call(rbind,lapply(strsplit(annotation.decoded,"_"),function(x){
+	if(length(x)==3)
+		{c(diet=(x[1]),time=sub("w","",x[2],ignore.case = T),mouse=x[3])}
+	else
+	{
+		c(diet=paste(x[1],tolower(x[2]),sep="."),time=sub("w","",x[3],ignore.case = T),mouse=x[4])
+	}
+	
+}))
+
+annotation.decoded.tabular = cbind(annotation.decoded.tabular,"name" = annotation.decoded)
+rownames(annotation.decoded.tabular) = annotation.decoded.tabular[,"name"]
+
+head(annotation.decoded.tabular)
+
+```
+
+
+
+
+### compute ratios 
+… as suggested from a maxquant discussion group
+ratio_samplei = (1+expression_sample_i)/(1+matching_reference_channel_expression)
+
+```{r}
+
+
+sample.plex.ratios = do.call(cbind,lapply(unique(tmt.col.name),function(tmt_id){
+	
+	do.call(cbind,lapply(1:9,function(i){
+		
+		(1+data.reporter.intens.corr.expr[,paste("Reporter.intensity.corrected.",i,".",tmt_id,sep="")])/
+		(1+data.reporter.intens.corr.expr[,paste("Reporter.intensity.corrected.0.",tmt_id,sep="")])
+		
+	}))
+		
+}))
+
+colnames(sample.plex.ratios) = c(sapply(unique(tmt.col.name),function(x){sapply(1:9,function(y)paste("ratios.",y,".",x,sep=""))}))
+
+rownames(sample.plex.ratios) = rownames(data.reporter.intens.corr.expr)
+
+head(sample.plex.ratios)
+
+
+rm(data.reporter.intens.corr.expr) ## clean
+
+
+#remove samples as annotated by barbara and claire
+# data.reporter.intens.corr.expr = data.reporter.intens.corr.expr[,!colnames(data.reporter.intens.corr.expr) %in% c("Reporter.intensity.corrected.6.TMT9","Reporter.intensity.corrected.6.TMT9","Reporter.intensity.corrected.6.TMT9","Reporter.intensity.corrected.6.TMT9")]
+# 
+
+sample.plex.ratios = sample.plex.ratios[,!colnames(sample.plex.ratios) %in% c("ratios.6.TMT9","ratios.6.TMT9","ratios.6.TMT9","ratios.6.TMT9")]
+
+dim(sample.plex.ratios)
+
+
+# sample order changed > new decoding
+annotation.decoded.ratios = annotation.decoded
+names(annotation.decoded.ratios) = sub("Reporter.intensity.corrected","ratios",names(annotation.decoded))
+# remove reference channel
+annotation.decoded.ratios = annotation.decoded.ratios[-1*grep("0",names(annotation.decoded.ratios))]
+
+
+
+
+```
+
+
+
+## inspect
+
+
+
+
+
+
+
+```{r}
+
+### now for ratios
+
+annotation.data.frame = data.frame(cbind(annotation.decoded.tabular[annotation.decoded.ratios[colnames(sample.plex.ratios)],1:3],tmt=substr(colnames(sample.plex.ratios),10,13)),row.names = colnames(sample.plex.ratios))
+
+pheatmap(cor(log10(sample.plex.ratios),use = "pair"),labels_row  = annotation.decoded.ratios[colnames(sample.plex.ratios)],labels_col = annotation.decoded.ratios[colnames(sample.plex.ratios)],main="Ratios",annotation_row =  annotation.data.frame)
+
+# boxplot(log2(data.reporter.intens.corr.expr))
+# boxplot(log10(sample.plex.ratios))
+
+
+
+
+```
+
+
+
+
+
+# plot time course & stats
+
+
+define individual vectors with annotation content for easy use later on.
+And define annotation & nice description thingy to use
+
+```{r}
+
+
+expression.annotation = annotation.data.frame[colnames(sample.plex.ratios),c("diet","time","mouse")]
+expression.data.colnicename = annotation.decoded.ratios[colnames(sample.plex.ratios)]
+
+
+time = as.numeric(expression.annotation[,"time"])
+mouse.pch = c(15,16,17)[annotation.data.frame[,"mouse"]]
+diet = as.character(annotation.data.frame[,"diet"])
+diet.col = c("SD"="black","WD.4w"="blue","WD.6w"="orange","WD.8w"="red")[as.character(annotation.data.frame[,"diet"])]
+
+
+
+```
+
+
+
+
+```{r}
+
+
+# boxplot(expression.data[,c(which(expression.data.colnicename %in% c("SD_12w_M1", "SD_6w_M1", "SD_30w_M2")))],las=2,main="presumably good?",ylim=c(-1,1))
+# grid()
+
+# boxplot(expression.data[,c(which(expression.data.colnicename %in% c("SD_34w_M1", "WD_6w_12W_M2", "WD_6w_20w_M2")))],las=2,,ylim=c(-1,1),main="presumably bad?")
+# grid()
+
+
+boxplot(log10(sample.plex.ratios[,order(expression.data.colnicename)]),las=2,,ylim=c(-1.5,1.5),main="overall ratios",col=diet.col[order(expression.data.colnicename)], outcol="lightgray")
+grid()
+
+
+```
+
+
+
+Important: Especially for long fed diets the overall expression GOES DOWN
+
+# So now we put values to same median
+
+
+
+```{r}
+
+
+
+
+
+expression.data.centered = apply(log10(sample.plex.ratios),MARGIN = 2, function(x)x/median(x,na.rm=T))
+rownames(expression.data.centered) = rownames(sample.plex.ratios)
+
+expression.data.scaled = apply(log10(sample.plex.ratios),MARGIN = 2, scale)
+rownames(expression.data.scaled) = rownames(sample.plex.ratios)
+
+boxplot(expression.data.centered[,order(expression.data.colnicename)],las=2,,ylim=c(-5,5),main="overall ratios centered only ",col=diet.col[order(expression.data.colnicename)], outcol="lightgray")
+grid()
+
+boxplot(expression.data.scaled[,order(expression.data.colnicename)],las=2,,ylim=c(-5,5),main="overall ratios scaled",col=diet.col[order(expression.data.colnicename)], outcol="lightgray")
+grid()
+
+
+pheatmap(cor((expression.data.centered),use = "pair"),labels_row  = annotation.decoded.ratios[colnames(sample.plex.ratios)],labels_col = annotation.decoded.ratios[colnames(sample.plex.ratios)],main="Ratios -- centered only",annotation_row =  annotation.data.frame, clustering_distance_rows = "euclidean",clustering_distance_cols = "euclidean")
+
+
+
+pheatmap(cor((expression.data.scaled),use = "pair"),labels_row  = annotation.decoded.ratios[colnames(sample.plex.ratios)],labels_col = annotation.decoded.ratios[colnames(sample.plex.ratios)],main="Ratios -- scaled only",annotation_row =  annotation.data.frame,clustering_distance_rows = "euclidean",clustering_distance_cols = "euclidean")
+
+
+
+
+
+```
+
+
+
+Continue to work with scaled ratios. Look more biologically clustering.
+
+
+```{r}
+
+
+
+
+## LOCK IN: useing scaled expression for further analysis
+expression.data = (expression.data.scaled)
+
+# remove some objects
+rm(expression.data.scaled, expression.data.centered,expression.annotation, expression.data.colnicename)
+
+expression.annotation = annotation.data.frame[colnames(expression.data),c("diet","time","mouse")]
+expression.data.colnicename = annotation.decoded.ratios[colnames(expression.data)]
+
+dim(expression.data)
+
+proteinID2geneName = tapply(unlist(data.input.file[,"Gene names"]),unlist(data.input.file[,"Protein IDs"]),c)
+
+
+```
+
+
+## do stats
+
+Start simple: linear model accounting for time (but not time dependent) and diet
+FDR correct to 0.01.
+
+```{r}
+
+
+
+
+table(time, diet)
+time.ignoreinbetween = time
+time.ignoreinbetween[ time %in% c(4, 6,7,9,10,11,12,13,14)] = NA
+time.ignoreinbetween[time.ignoreinbetween == 2] = 1
+# time.saveme = time
+time = time.ignoreinbetween
+
+## rough stats
+diet_overall = apply(expression.data,MARGIN = 1,function(p){
+	lm(p ~ time.ignoreinbetween + diet)
+})
+
+assertthat::assert_that(length(diet_overall)==nrow(expression.data))
+
+
+# p.values = unlist(lapply(diet_overall,function(i){
+# 	fstat = summary(i)$fstatistic
+# 	pf(fstat[1], fstat[2], fstat[3], lower.tail=FALSE) 
+# }))
+# 
+# fdr = p.adjust(p.values,method = "BH")
+# sum(p.values < 0.01)
+# sum(fdr < 0.01)
+# which.min(fdr)
+
+
+
+
+p.values.byCovariate = do.call(rbind,lapply(diet_overall,function(i){
+	coefficients(summary(i))[-1,"Pr(>|t|)"]
+}))
+rownames(p.values.byCovariate) = rownames(expression.data)
+
+
+assertthat::assert_that(!is.null(rownames(p.values.byCovariate)))
+
+p.values.byCovariate.fdr = apply(p.values.byCovariate,MARGIN = 2, p.adjust,method="BH")
+
+
+
+apply(p.values.byCovariate.fdr,2,function(i)sum(i<0.01))
+
+
+venn(apply(p.values.byCovariate.fdr[,-1],2,function(i){which(i<0.01)}))
+
+
+```
+
+
+
+```{r}
+
+
+plotSingleProteinExpr = function(id){
+	### PLOT sample expression
+y = expression.data[id,]
+
+	plot(time,y,col=diet.col,pch=mouse.pch,type="p",main=paste(id,proteinID2geneName[id]))
+
+
+}
+
+
+
+```
+
+```{r}
+
+# WD 4 weeks proteins:
+top_4weeks = expression.data[names(which(p.values.byCovariate.fdr[,"dietWD.4w"]<0.001)),]
+pheatmap(top_4weeks[,order(expression.data.colnicename)],cluster_cols = F,annotation_col = expression.annotation,main="FDR 0.001 proteins in WD 4w",labels_col = expression.data.colnicename[order(expression.data.colnicename)],labels_row = substring(rownames(top_4weeks),1,10))
+
+pheatmap(top_4weeks[,order(expression.data.colnicename)],cluster_cols = F,annotation_col = expression.annotation,main="FDR 0.001 proteins in WD 4w",labels_col = expression.data.colnicename[order(expression.data.colnicename)],labels_row = proteinID2geneName[rownames(top_4weeks)])
+
+
+# interesting guys are: P55050 = Fatty acid-binding protein, intestinal
+# Q921H8  = 3-ketoacyl-CoA thiolase A, peroxisomalGene: Acaa1a
+# Q8VCH0  = 3-ketoacyl-CoA thiolase B, peroxisomal Gene: Acaa1b
+# P84244;P02301 = Histone H3.3 (Gene: H3f3a) & Histone H3.3C (Gene: H3f3c)
+
+## plot
+
+# plotSingleProteinExpr("P55050")
+# plotSingleProteinExpr("Q921H8")
+# plotSingleProteinExpr("Q8VCH0")
+# plotSingleProteinExpr("P84244;P02301")
+
+plotSingleProteinExpr("P54797")
+plotSingleProteinExpr("P62806")
+
+
+
+```
+
+
+```{r}
+
+# WD 6 weeks proteins:
+top_6weeks <- expression.data[names(which(p.values.byCovariate.fdr[,"dietWD.6w"]<0.000001)),]
+pheatmap(top_6weeks[,order(expression.data.colnicename)],cluster_cols = F, annotation_col = expression.annotation,main="FDR 0.000001 proteins in WD 6w",labels_row = substring(rownames(top_6weeks),1,20),fontsize = 6,labels_col = expression.data.colnicename[order(expression.data.colnicename)])
+
+
+proteinID2geneName[rownames(top_6weeks)]
+
+plotSingleProteinExpr("Q920E5")
+
+
+```
+
+
+
+```{r}
+
+
+# WD 8 weeks proteins:
+top_8weeks <- expression.data[names(which(p.values.byCovariate.fdr[,"dietWD.8w"]<0.0000001)),]
+pheatmap(top_8weeks[,order(expression.data.colnicename)],cluster_cols = F,annotation_col = expression.annotation,main="FDR 0.0000001 proteins in WD 8w",labels_row = substring(rownames(top_8weeks),1,20),fontsize = 6,labels_col = expression.data.colnicename[order(expression.data.colnicename)])
+
+
+
+
+proteinID2geneName[rownames(top_8weeks)]
+
+plotSingleProteinExpr("Q920E5")
+
+
+
+```
+
+
+```{r}
+
+# WD 4 weeks proteins:
+only_4weeks_sign = expression.data[names(which(p.values.byCovariate.fdr[,"dietWD.4w"]<0.01 & p.values.byCovariate.fdr[,"dietWD.6w"]>0.01 & p.values.byCovariate.fdr[,"dietWD.8w"]>0.01)),]
+pheatmap(only_4weeks_sign[,order(expression.data.colnicename)],cluster_cols = F,annotation_col = expression.annotation,main="only sign in WD 4w",labels_col = expression.data.colnicename[order(expression.data.colnicename)],labels_row = substring(rownames(top_4weeks),1,10))
+
+pheatmap(only_4weeks_sign[,order(expression.data.colnicename)],cluster_cols = F,annotation_col = expression.annotation,main="only sign in WD 4w",labels_col = expression.data.colnicename[order(expression.data.colnicename)],labels_row = proteinID2geneName[rownames(top_4weeks)])
+
+
+# interesting guys are: P55050 = Fatty acid-binding protein, intestinal
+# Q921H8  = 3-ketoacyl-CoA thiolase A, peroxisomalGene: Acaa1a
+# Q8VCH0  = 3-ketoacyl-CoA thiolase B, peroxisomal Gene: Acaa1b
+# P84244;P02301 = Histone H3.3 (Gene: H3f3a) & Histone H3.3C (Gene: H3f3c)
+
+## plot
+plotSingleProteinExpr("P17717")
+P24472
+
+```
+
